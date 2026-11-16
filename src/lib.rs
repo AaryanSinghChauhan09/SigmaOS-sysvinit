@@ -1,78 +1,119 @@
-// SPDX-License-Identifier: Apache-2.0
-//! SigmaOS-sysvinit — SigmaOS sysvinit component inspired by Linux Mint / Omarchy / Arch Linux.
-//!
-//! Ordered execution plan: validated steps executed fail-fast, first error aborts.
-//! Principles: single responsibility, fail-fast, defensive programming,
-//! component isolation, stable API, deterministic tests.
-
 #![forbid(unsafe_code)]
 
-use std::fmt;
-/// Errors for `PlanError` operations. Fail-fast: invalid input is rejected.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PlanError {
-    /// Plan step description must not be empty
-    EmptyStep,
-    /// Cannot run an empty plan
-    EmptyPlan,
-    /// A plan step failed during execution
-    StepFailed(String),
+pub mod config;
+pub mod service;
+pub mod runlevel;
+pub mod script;
+pub mod supervisor;
+
+use anyhow::Result;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+/// Main SysVinit compatibility layer structure
+#[derive(Clone)]
+pub struct SysVinit {
+    config: Arc<RwLock<config::SysVinitConfig>>,
+    supervisor: supervisor::ServiceSupervisor,
 }
 
-impl fmt::Display for PlanError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EmptyStep => write!(f, "plan step description must not be empty"),
-            Self::EmptyPlan => write!(f, "cannot run an empty plan"),
-            Self::StepFailed(x) => write!(f, "a plan step failed during execution: {x}"),
-        }
+impl SysVinit {
+    /// Create a new SysVinit compatibility layer instance
+    pub async fn new() -> Result<Self> {
+        let config = config::SysVinitConfig::load()?;
+        let supervisor = supervisor::ServiceSupervisor::new(config.clone()).await?;
+        
+        Ok(Self {
+            config: Arc::new(RwLock::new(config)),
+            supervisor,
+        })
     }
-}
 
-impl std::error::Error for PlanError {}
-
-/// An ordered list of steps forming an executable plan.
-#[derive(Debug, Default)]
-pub struct Plan {
-    steps: Vec<String>,
-}
-
-impl Plan {
-    /// Empty plan.
-    pub fn new() -> Self { Self::default() }
-
-    /// Append a step; fails on empty description.
-    pub fn add_step(&mut self, step: impl Into<String>) -> Result<(), PlanError> {
-        let step = step.into();
-        if step.trim().is_empty() { return Err(PlanError::EmptyStep); }
-        self.steps.push(step);
+    /// Initialize the SysVinit system
+    pub async fn initialize(&self) -> Result<()> {
+        log::info!("Initializing SysVinit compatibility layer");
+        
+        let config = self.config.read().await;
+        runlevel::set_runlevel(config.default_runlevel).await?;
+        
+        self.supervisor.start_all_services().await?;
+        
+        log::info!("SysVinit initialization complete");
         Ok(())
     }
 
-    /// Number of steps.
-    pub fn len(&self) -> usize { self.steps.len() }
-
-    /// Whether the plan has no steps.
-    pub fn is_empty(&self) -> bool { self.steps.is_empty() }
-
-    /// Validate the plan is non-empty.
-    pub fn validate(&self) -> Result<(), PlanError> {
-        if self.steps.is_empty() { Err(PlanError::EmptyPlan) } else { Ok(()) }
+    /// Shutdown the SysVinit system
+    pub async fn shutdown(&self) -> Result<()> {
+        log::info!("Shutting down SysVinit compatibility layer");
+        
+        self.supervisor.stop_all_services().await?;
+        
+        log::info!("SysVinit shutdown complete");
+        Ok(())
     }
 
-    /// Execute steps in order via `exec`; first failure aborts and is
-    /// wrapped in `StepFailed`. Returns the list of completed step names.
-    pub fn run<F>(&self, mut exec: F) -> Result<Vec<String>, PlanError>
-    where
-        F: FnMut(&str) -> Result<(), String>,
-    {
-        self.validate()?;
-        let mut done = Vec::with_capacity(self.steps.len());
-        for step in &self.steps {
-            exec(step).map_err(|e| PlanError::StepFailed(format!("{step}: {e}")))?;
-            done.push(step.clone());
+    /// Get the current runlevel
+    pub async fn current_runlevel(&self) -> Result<u8> {
+        runlevel::get_runlevel().await
+    }
+
+    /// Change to a different runlevel
+    pub async fn change_runlevel(&self, runlevel: u8) -> Result<()> {
+        log::info!("Changing to runlevel {}", runlevel);
+        
+        let current = self.current_runlevel().await?;
+        if current == runlevel {
+            log::info!("Already at runlevel {}", runlevel);
+            return Ok(());
         }
-        Ok(done)
+
+        // Stop services for current runlevel
+        self.supervisor.stop_runlevel_services(current).await?;
+        
+        // Start services for new runlevel
+        self.supervisor.start_runlevel_services(runlevel).await?;
+        
+        runlevel::set_runlevel(runlevel).await?;
+        
+        log::info!("Changed to runlevel {}", runlevel);
+        Ok(())
+    }
+
+    /// Start a specific service
+    pub async fn start_service(&self, name: &str) -> Result<()> {
+        log::info!("Starting service: {}", name);
+        self.supervisor.start_service(name).await
+    }
+
+    /// Stop a specific service
+    pub async fn stop_service(&self, name: &str) -> Result<()> {
+        log::info!("Stopping service: {}", name);
+        self.supervisor.stop_service(name).await
+    }
+
+    /// Restart a specific service
+    pub async fn restart_service(&self, name: &str) -> Result<()> {
+        log::info!("Restarting service: {}", name);
+        self.supervisor.restart_service(name).await
+    }
+
+    /// Get service status
+    pub async fn service_status(&self, name: &str) -> Result<service::ServiceStatus> {
+        self.supervisor.service_status(name).await
+    }
+
+    /// List all services
+    pub async fn list_services(&self) -> Result<Vec<String>> {
+        self.supervisor.list_services().await
+    }
+}
+
+impl Default for SysVinit {
+    fn default() -> Self {
+        // Note: This is a convenience constructor that may fail
+        // In production, use new() which returns Result
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(Self::new()).unwrap()
     }
 }
 
@@ -80,48 +121,9 @@ impl Plan {
 mod tests {
     use super::*;
 
-    fn plan() -> Plan {
-        let mut p = Plan::new();
-        p.add_step("partition").unwrap();
-        p.add_step("install base").unwrap();
-        p
-    }
-
-    #[test]
-    fn run_executes_in_order() {
-        let p = plan();
-        let done = p.run(|_| Ok(())).unwrap();
-        assert_eq!(done, vec!["partition".to_string(), "install base".to_string()]);
-    }
-
-    #[test]
-    fn failure_aborts_plan() {
-        let p = plan();
-        let res = p.run(|s| if s == "install base" { Err("boom".into()) } else { Ok(()) });
-        assert!(matches!(res, Err(PlanError::StepFailed(_))));
-    }
-
-    #[test]
-    fn empty_step_rejected() {
-        assert!(matches!(Plan::new().add_step(" "), Err(PlanError::EmptyStep)));
-    }
-
-    #[test]
-    fn empty_plan_run_fails() {
-        assert_eq!(Plan::new().run(|_| Ok(())), Err(PlanError::EmptyPlan));
-    }
-
-}
-
-/// Backwards-compatible component handle (kept for existing callers/tests).
-#[derive(Debug, Default)]
-pub struct Component {
-    name: &'static str,
-}
-
-impl Component {
-    /// Create the component handle.
-    pub fn new() -> Self {
-        Self { name: "SigmaOS Component" }
+    #[tokio::test]
+    async fn test_sysvinit_creation() {
+        let sysvinit = SysVinit::new().await;
+        assert!(sysvinit.is_ok());
     }
 }
