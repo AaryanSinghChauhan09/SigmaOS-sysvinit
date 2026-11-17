@@ -1,7 +1,7 @@
 [component]
 name = "SigmaOS-sysvinit"
 tier = 2
-stability = "scaffold"
+stability = "beta"
 language = "rust"
 description = "System V init model"
 upstream = []

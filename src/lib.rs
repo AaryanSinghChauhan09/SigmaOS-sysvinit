@@ -20,13 +20,10 @@ pub struct SysVinit {
 impl SysVinit {
     /// Create a new SysVinit compatibility layer instance
     pub async fn new() -> Result<Self> {
-        let config = config::SysVinitConfig::load()?;
+        let config = Arc::new(RwLock::new(config::SysVinitConfig::load()?));
         let supervisor = supervisor::ServiceSupervisor::new(config.clone()).await?;
         
-        Ok(Self {
-            config: Arc::new(RwLock::new(config)),
-            supervisor,
-        })
+        Ok(Self { config, supervisor })
     }
 
     /// Initialize the SysVinit system

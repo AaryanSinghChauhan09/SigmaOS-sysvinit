@@ -1,12 +1,13 @@
 #![forbid(unsafe_code)]
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crate::config::SysVinitConfig;
-use crate::service::{Service, ServiceRegistry, ServiceStatus};
+use crate::service::{ServiceRegistry, ServiceStatus};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Service supervisor
+#[derive(Clone)]
 pub struct ServiceSupervisor {
     config: Arc<RwLock<SysVinitConfig>>,
     registry: Arc<RwLock<ServiceRegistry>>,
@@ -15,9 +16,9 @@ pub struct ServiceSupervisor {
 impl ServiceSupervisor {
     /// Create a new service supervisor
     pub async fn new(config: Arc<RwLock<SysVinitConfig>>) -> Result<Self> {
-        let config_read = config.read().await;
+        let init_scripts_dir = config.read().await.init_scripts_dir.clone();
         let mut registry = ServiceRegistry::new();
-        registry.load_from_dir(&config_read.init_scripts_dir)?;
+        registry.load_from_dir(&init_scripts_dir)?;
         
         Ok(Self {
             config,
@@ -39,14 +40,14 @@ impl ServiceSupervisor {
         log::info!("Starting services for runlevel {}", runlevel);
         
         let mut registry = self.registry.write().await;
-        let services = registry.for_runlevel(runlevel);
+        let mut targets: Vec<(String, u32)> = registry
+            .for_runlevel(runlevel)
+            .iter()
+            .map(|s| (s.name.clone(), s.start_priority))
+            .collect();
+        targets.sort_by_key(|(_, priority)| *priority);
         
-        // Sort by start priority
-        let mut sorted_services: Vec<_> = services.iter().collect();
-        sorted_services.sort_by_key(|s| s.start_priority);
-        
-        for service_ref in sorted_services {
-            let name = service_ref.name.clone();
+        for (name, _) in targets {
             if let Some(service) = registry.get_mut(&name) {
                 if service.status != ServiceStatus::Running {
                     if let Err(e) = service.start().await {
@@ -64,14 +65,14 @@ impl ServiceSupervisor {
         log::info!("Stopping services for runlevel {}", runlevel);
         
         let mut registry = self.registry.write().await;
-        let services = registry.for_runlevel(runlevel);
+        let mut targets: Vec<(String, u32)> = registry
+            .for_runlevel(runlevel)
+            .iter()
+            .map(|s| (s.name.clone(), s.stop_priority))
+            .collect();
+        targets.sort_by_key(|(_, priority)| std::cmp::Reverse(*priority));
         
-        // Sort by stop priority (reverse order of start)
-        let mut sorted_services: Vec<_> = services.iter().collect();
-        sorted_services.sort_by_key(|s| std::cmp::Reverse(s.stop_priority));
-        
-        for service_ref in sorted_services {
-            let name = service_ref.name.clone();
+        for (name, _) in targets {
             if let Some(service) = registry.get_mut(&name) {
                 if service.status == ServiceStatus::Running {
                     if let Err(e) = service.stop().await {
@@ -89,14 +90,14 @@ impl ServiceSupervisor {
         log::info!("Stopping all services");
         
         let mut registry = self.registry.write().await;
-        let services = registry.all();
+        let mut targets: Vec<(String, u32)> = registry
+            .all()
+            .iter()
+            .map(|s| (s.name.clone(), s.stop_priority))
+            .collect();
+        targets.sort_by_key(|(_, priority)| std::cmp::Reverse(*priority));
         
-        // Sort by stop priority
-        let mut sorted_services: Vec<_> = services.iter().collect();
-        sorted_services.sort_by_key(|s| std::cmp::Reverse(s.stop_priority));
-        
-        for service_ref in sorted_services {
-            let name = service_ref.name.clone();
+        for (name, _) in targets {
             if let Some(service) = registry.get_mut(&name) {
                 if service.status == ServiceStatus::Running {
                     if let Err(e) = service.stop().await {

@@ -4,12 +4,12 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Child;
 use tokio::process::Command as TokioCommand;
 
 /// Service status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ServiceStatus {
+    #[default]
     Stopped,
     Starting,
     Running,
@@ -78,8 +78,8 @@ impl Service {
         
         let mut description = String::new();
         let mut runlevels = vec![2, 3, 4, 5]; // Default runlevels
-        let mut start_priority = 50;
-        let mut stop_priority = 50;
+        let start_priority = 50;
+        let stop_priority = 50;
         
         for line in content.lines() {
             let line = line.trim();
