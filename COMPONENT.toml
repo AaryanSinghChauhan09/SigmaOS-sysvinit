@@ -3,7 +3,7 @@ name = "SigmaOS-sysvinit"
 tier = 2
 stability = "scaffold"
 language = "rust"
-description = "sysvinit component"
+description = "System V init model"
 upstream = []
 
 [contract]
