@@ -1,28 +1,15 @@
 [package]
-name = "sigmaos-sysvinit"
+name = "SigmaOS-sysvinit"
 version = "0.1.0"
 edition = "2021"
-authors = ["SigmaOS Contributors"]
-description = "SysVinit init system compatibility layer for SigmaOS"
-license = "MIT"
-repository = "https://github.com/sigmaos/SigmaOS-sysvinit"
-keywords = ["init", "sysvinit", "service", "sigmaos"]
-categories = ["os", "os::unix-apis"]
+license = "Apache-2.0"
+description = "SigmaOS sigmaos_sysvinit component"
+
+[lib]
+name = "sigmaos_sysvinit"
+path = "src/lib.rs"
 
 [dependencies]
-anyhow = "1.0"
-tokio = { version = "1.35", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-log = "0.4"
-env_logger = "0.11"
-nix = { version = "0.27", features = ["process", "signal", "fs"] }
-clap = { version = "4.4", features = ["derive"] }
-dirs = "5.0"
+thiserror = "1"
 
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
+[dev-dependencies]

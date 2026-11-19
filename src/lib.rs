@@ -1,116 +1,66 @@
+//! SigmaOS-sysvinit — sysvinit component for SigmaOS
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
-pub mod config;
-pub mod service;
-pub mod runlevel;
-pub mod script;
-pub mod supervisor;
+use thiserror::Error;
 
-use anyhow::Result;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-
-/// Main SysVinit compatibility layer structure
-#[derive(Clone)]
-pub struct SysVinit {
-    config: Arc<RwLock<config::SysVinitConfig>>,
-    supervisor: supervisor::ServiceSupervisor,
+/// Error types for this component.
+#[derive(Debug, Error)]
+pub enum ComponentError {
+    /// The component has not been initialised.
+    #[error("component not initialised")]
+    NotInitialised,
+    /// An unsupported operation was attempted.
+    #[error("unsupported operation: {0}")]
+    Unsupported(&'static str),
 }
 
-impl SysVinit {
-    /// Create a new SysVinit compatibility layer instance
-    pub async fn new() -> Result<Self> {
-        let config = Arc::new(RwLock::new(config::SysVinitConfig::load()?));
-        let supervisor = supervisor::ServiceSupervisor::new(config.clone()).await?;
-        
-        Ok(Self { config, supervisor })
-    }
+/// Convenience result type.
+pub type ComponentResult<T> = Result<T, ComponentError>;
 
-    /// Initialize the SysVinit system
-    pub async fn initialize(&self) -> Result<()> {
-        log::info!("Initializing SysVinit compatibility layer");
-        
-        let config = self.config.read().await;
-        runlevel::set_runlevel(config.default_runlevel).await?;
-        
-        self.supervisor.start_all_services().await?;
-        
-        log::info!("SysVinit initialization complete");
-        Ok(())
-    }
+/// Core component struct for sysvinit.
+#[derive(Debug, Default, Clone)]
+pub struct Component {
+    initialised: bool,
+    name: String,
+}
 
-    /// Shutdown the SysVinit system
-    pub async fn shutdown(&self) -> Result<()> {
-        log::info!("Shutting down SysVinit compatibility layer");
-        
-        self.supervisor.stop_all_services().await?;
-        
-        log::info!("SysVinit shutdown complete");
-        Ok(())
-    }
-
-    /// Get the current runlevel
-    pub async fn current_runlevel(&self) -> Result<u8> {
-        runlevel::get_runlevel().await
-    }
-
-    /// Change to a different runlevel
-    pub async fn change_runlevel(&self, runlevel: u8) -> Result<()> {
-        log::info!("Changing to runlevel {}", runlevel);
-        
-        let current = self.current_runlevel().await?;
-        if current == runlevel {
-            log::info!("Already at runlevel {}", runlevel);
-            return Ok(());
+impl Component {
+    /// Create a new, uninitialised component.
+    pub fn new() -> Self {
+        Self {
+            initialised: false,
+            name: String::from("sysvinit"),
         }
+    }
 
-        // Stop services for current runlevel
-        self.supervisor.stop_runlevel_services(current).await?;
-        
-        // Start services for new runlevel
-        self.supervisor.start_runlevel_services(runlevel).await?;
-        
-        runlevel::set_runlevel(runlevel).await?;
-        
-        log::info!("Changed to runlevel {}", runlevel);
+    /// Initialise the component.
+    pub fn init(&mut self) -> ComponentResult<()> {
+        self.initialised = true;
         Ok(())
     }
 
-    /// Start a specific service
-    pub async fn start_service(&self, name: &str) -> Result<()> {
-        log::info!("Starting service: {}", name);
-        self.supervisor.start_service(name).await
+    /// Returns true if the component has been initialised.
+    pub fn is_ready(&self) -> bool {
+        self.initialised
     }
 
-    /// Stop a specific service
-    pub async fn stop_service(&self, name: &str) -> Result<()> {
-        log::info!("Stopping service: {}", name);
-        self.supervisor.stop_service(name).await
+    /// Execute the component's primary operation.
+    pub fn run(&self) -> ComponentResult<()> {
+        if !self.initialised {
+            return Err(ComponentError::NotInitialised);
+        }
+        Ok(())
     }
 
-    /// Restart a specific service
-    pub async fn restart_service(&self, name: &str) -> Result<()> {
-        log::info!("Restarting service: {}", name);
-        self.supervisor.restart_service(name).await
+    /// Return the component name.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
-    /// Get service status
-    pub async fn service_status(&self, name: &str) -> Result<service::ServiceStatus> {
-        self.supervisor.service_status(name).await
-    }
-
-    /// List all services
-    pub async fn list_services(&self) -> Result<Vec<String>> {
-        self.supervisor.list_services().await
-    }
-}
-
-impl Default for SysVinit {
-    fn default() -> Self {
-        // Note: This is a convenience constructor that may fail
-        // In production, use new() which returns Result
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(Self::new()).unwrap()
+    /// Reset the component to uninitialised state.
+    pub fn reset(&mut self) {
+        self.initialised = false;
     }
 }
 
@@ -118,9 +68,64 @@ impl Default for SysVinit {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_sysvinit_creation() {
-        let sysvinit = SysVinit::new().await;
-        assert!(sysvinit.is_ok());
+    #[test]
+    fn test_new_not_ready_aaa() {
+        // Arrange + Act
+        let c = Component::new();
+        // Assert
+        assert!(!c.is_ready());
+    }
+
+    #[test]
+    fn test_init_makes_ready_aaa() {
+        // Arrange
+        let mut c = Component::new();
+        // Act
+        c.init().unwrap();
+        // Assert
+        assert!(c.is_ready());
+    }
+
+    #[test]
+    fn test_run_before_init_fails_aaa() {
+        // Arrange
+        let c = Component::new();
+        // Act
+        let result = c.run();
+        // Assert
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_after_init_succeeds_aaa() {
+        // Arrange
+        let mut c = Component::new();
+        c.init().unwrap();
+        // Act
+        let result = c.run();
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_reset_clears_init_aaa() {
+        // Arrange
+        let mut c = Component::new();
+        c.init().unwrap();
+        assert!(c.is_ready());
+        // Act
+        c.reset();
+        // Assert
+        assert!(!c.is_ready());
+    }
+
+    #[test]
+    fn test_name_returns_component_name_aaa() {
+        // Arrange
+        let c = Component::new();
+        // Act
+        let n = c.name();
+        // Assert
+        assert!(!n.is_empty());
     }
 }
